@@ -13,6 +13,7 @@ import warnings
 import webbrowser
 import tempfile
 import platform
+import argparse
 from pathlib import Path
 from datetime import datetime
 from io import BytesIO
@@ -23,9 +24,11 @@ from qrcode import make as qrcode_make
 from PIL import Image
 
 
+
 warnings.filterwarnings('ignore')
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 requests.packages.urllib3.disable_warnings()
+urllib3.disable_warnings()  
 
 
 APP_NAME = 'biliraku'
@@ -40,12 +43,22 @@ os.makedirs(USER_CONFIG_DIR, exist_ok=True)
 
 AUTH_FILE = os.path.join(USER_CONFIG_DIR, 'auth.json')
 DEEPSEEK_KEY_FILE = os.path.join(USER_CONFIG_DIR, 'deepseek_key.json')
+CLOUD_CONFIG_FILE = os.path.join(USER_CONFIG_DIR, 'jfbym_key.json')
+CATEGORY_CONFIG_FILE = os.path.join(USER_CONFIG_DIR, 'category_config.json')
+
+
+
+CONFIG_FILE = os.path.join(USER_CONFIG_DIR, 'config.json')
+
+
+
+PROJECT_CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
 
 
 API_CONFIG = {
     'appkey': '783bbb7264451d82',
     'appsec': '2653583c8873dea268ab9386918b1d65',
-    'user_agent': 'Mozilla/5.0 BiliDroid/1.12.0 (bbcallen@gmail.com)',
+    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 }
 
 
@@ -54,14 +67,16 @@ HEADERS = {
     'Content-Type': 'application/x-www-form-urlencoded',
     'Accept': 'application/json',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    'x-bili-metadata-legal-region': 'CN',
-    'x-bili-aurora-eid': '',
-    'x-bili-aurora-zone': '',
+    'x-bili-metadata-bin': '',
+    'x-bili-metadata-buvid': '',
+    'x-bili-metadata-device': '',
+    'x-bili-metadata-platform': 'pc',
+    'x-bili-metadata-env': 'prod',
 }
 
 
 JFBYM_TOKEN = ""
-JFBYM_TYPE = "10101"
+JFBYM_TYPE = "10103"
 USE_CLOUD_CAPTCHA = False
 AUTO_SELECT_CATEGORY = False
 AUTO_CATEGORY_ID = '6'
@@ -70,19 +85,25 @@ AUTO_CATEGORY_ID = '6'
 access_token = None
 csrf = None
 API_KEY_DEEPSEEK = None
+login_count = 0
 
 
-PROMPT = '''
-当前时间：{}
-你是一名具备高度准确性与效率的答题专家。在解答选择题时，请依据题干与选项判断最合理的答案，并返回其对应的序号（1, 2, 3, 4）。
+PROMPT = """当前时间：{}
+
+你是一个高效、精准的答题专家。面对选择题时，请根据题目和选项判断最可能的正确答案，并仅返回对应选项的序号（1、2、3、4）。
+
 示例：
 问题：中国第一位皇帝是谁？
 选项：['秦始皇', '汉武帝', '唐太宗', '刘邦']
 回答：1
+
 如果不能完全确定答案，请选择最接近正确的选项，并返回其序号。不提供额外解释，也不输出 1–4 之外的内容。
+
 ---
-请回答我的问题：{}
-'''
+
+请回答以下问题：
+{}
+"""
 
 
 def setup_logger(name=APP_NAME):
@@ -153,45 +174,56 @@ def appsign(params):
         logger.error(f'生成签名失败: {str(e)}')
         raise
 
-def get(url, params):
+def get(url, params=None):
+    global headers, access_token, session
+
+    
+    current_headers = headers.copy()
+    if access_token:
+        current_headers.update({
+            'Authorization': f'Bearer {access_token}'
+        })
 
     try:
-        signed_params = appsign(params)
-        logger.debug(f'发送GET请求: {url}, 参数: {signed_params}')
-        response = session.get(url, params=signed_params, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        logger.debug(f'请求成功: {data}')
-        return data
-    except requests.exceptions.HTTPError as e:
-        logger.error(f'HTTP错误: {e}\n响应内容: {e.response.text}')
-        raise
-    except requests.exceptions.RequestException as e:
-        logger.error(f'请求失败: {e}')
-        raise
-    except ValueError as e:
-        logger.error(f'解析响应JSON失败: {e}')
-        raise
+        logger.debug(f"GET请求: {url}")
+        if params:
+            logger.debug(f"参数: {params}")
 
-def post(url, params):
+        response = session.get(url, headers=current_headers, params=params, verify=False)
+        response.raise_for_status()
+        
+        response_json = response.json()
+        return response_json
+    except Exception as e:
+        logger.error(f"GET请求失败: {str(e)}")
+        return {'code': -1, 'message': str(e)}
+
+
+def post(url, data=None, json=None):
+    global headers, access_token, session
+
+    
+    current_headers = headers.copy()
+    if access_token:
+        current_headers.update({
+            'Authorization': f'Bearer {access_token}'
+        })
 
     try:
-        signed_params = appsign(params)
-        logger.debug(f'发送POST请求: {url}, 参数: {signed_params}')
-        response = session.post(url, data=signed_params, headers=headers)
+        logger.debug(f"POST请求: {url}")
+        if data:
+            logger.debug(f"表单数据: {data}")
+        if json:
+            logger.debug(f"JSON数据: {json}")
+
+        response = session.post(url, headers=current_headers, data=data, json=json, verify=False)
         response.raise_for_status()
-        data = response.json()
-        logger.debug(f'请求成功: {data}')
-        return data
-    except requests.exceptions.HTTPError as e:
-        logger.error(f'HTTP错误: {e}\n响应内容: {e.response.text}')
-        raise
-    except requests.exceptions.RequestException as e:
-        logger.error(f'请求失败: {e}')
-        raise
-    except ValueError as e:
-        logger.error(f'解析响应JSON失败: {e}')
-        raise
+        
+        response_json = response.json()
+        return response_json
+    except Exception as e:
+        logger.error(f"POST请求失败: {str(e)}")
+        return {'code': -1, 'message': str(e)}
 
 
 def load_api_key():
@@ -215,10 +247,9 @@ def save_api_key(api_key):
         logger.error(f'保存DeepSeek API密钥失败: {str(e)}')
 
 def load_auth_data():
-
+    
     if os.path.exists(AUTH_FILE):
         try:
-
             file_mtime = os.path.getmtime(AUTH_FILE)
             current_time = time.time()
             if (current_time - file_mtime) > 7 * 24 * 3600:
@@ -227,28 +258,78 @@ def load_auth_data():
                 
             with open(AUTH_FILE, 'r') as f:
                 auth_data = json.load(f)
-                if all(key in auth_data for key in ['access_token', 'csrf', 'mid', 'cookie']):
+                
+                if 'access_token' in auth_data:
                     global access_token, csrf
                     access_token = auth_data['access_token']
-                    csrf = auth_data['csrf']
-                    headers.update({
-                        'x-bili-mid': auth_data['mid'],
-                        'cookie': auth_data['cookie']
-                    })
+                    
+                    csrf = auth_data.get('csrf', '')
+                    
+                    
+                    if 'mid' in auth_data:
+                        headers.update({
+                            'x-bili-mid': auth_data['mid'],
+                        })
+                    
+                    
+                    if 'cookie' in auth_data and auth_data['cookie']:
+                        headers.update({
+                            'cookie': auth_data['cookie']
+                        })
+                        
                     logger.info('已从缓存加载登录信息')
                     return True
         except Exception as e:
             logger.error(f'读取认证信息失败: {str(e)}')
     return False
 
-def save_auth_data(auth_data):
+def check_auth():
+    
+    global access_token
+    
+    
+    if access_token:
+        logger.info("本地已有登录状态，验证中...")
+        return True
+    
+    
+    if load_auth_data():
+        return True
+    
+    logger.info("未检测到登录状态，需要重新登录")
+    return False
 
+def save_auth_data(auth_data):
+    
     try:
+        
+        if 'access_token' not in auth_data or not auth_data['access_token']:
+            logger.error("认证数据缺少access_token，无法保存")
+            return False
+        
+        
+        if 'mid' not in auth_data or not auth_data['mid']:
+            auth_data['mid'] = '0'
+            logger.warning("认证数据缺少mid，将使用默认值")
+        
+        
+        if 'csrf' not in auth_data:
+            auth_data['csrf'] = ''
+            logger.warning("认证数据缺少csrf，将使用空值")
+            
+        
+        if 'cookie' not in auth_data:
+            auth_data['cookie'] = ''
+            logger.warning("认证数据缺少cookie，将使用空值")
+                
+        
         with open(AUTH_FILE, 'w') as f:
             json.dump(auth_data, f, indent=4)
         logger.info('认证信息已保存到缓存')
+        return True
     except Exception as e:
         logger.error(f'保存认证信息失败: {str(e)}')
+        return False
 
 
 class DeepSeekAPI:
@@ -281,7 +362,7 @@ class DeepSeekAPI:
                 headers=headers,
                 json=data,
                 timeout=timeout,
-                verify=False
+                verify=False  
             )
             
 
@@ -318,7 +399,8 @@ def download_captcha_image(url):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            response = requests.get(url, headers=headers, timeout=10)
+            
+            response = requests.get(url, headers=headers, timeout=10, verify=False)
             if response.status_code == 200:
                 return response.content
             elif response.status_code == 412:
@@ -344,46 +426,81 @@ def recognize_with_jfbym(image_data):
         return None
     
     try:
-
+        
         base64_data = base64.b64encode(image_data).decode('utf-8')
         
-
+        
+        api_url = "http://api.jfbym.com/api/YmServer/customApi"
+        
+        
         data = {
-            'softid': '96001',
-            'type': JFBYM_TYPE,
-            'token': JFBYM_TOKEN
+            "token": JFBYM_TOKEN,
+            "type": JFBYM_TYPE,
+            "image": base64_data,
         }
         
-        files = {
-            'image': ('captcha.jpg', base64_data)
+        headers = {
+            "Content-Type": "application/json"
         }
         
-
-        api_url = 'https://v2-api.jsdama.com/upload'
+        logger.info(f"请求云码API，类型ID: {JFBYM_TYPE}")
         
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                response = requests.post(api_url, data=data, files=files, timeout=15)
+                
+                proxies = {
+                    "http": None,
+                    "https": None
+                }
+                logger.info("已禁用代理设置，直接连接到云码API服务器")
+                
+                
+                response = requests.post(
+                    api_url, 
+                    headers=headers, 
+                    json=data, 
+                    timeout=15, 
+                    verify=False,
+                    proxies=proxies  
+                )
+                
+                logger.info(f"云码API响应状态码: {response.status_code}")
                 
                 if response.status_code == 200:
+                    
+                    logger.info(f"云码API完整响应: {response.text}")
+                    
                     result = response.json()
-                    if result.get('code') == 0:
-                        captcha_text = result.get('data', {}).get('result')
-                        logger.info(f"云码识别成功：{captcha_text}")
-                        return captcha_text
+                    logger.info(f"云码API响应JSON: {result}")
+                    
+                    
+                    if result.get('code') == 10000:
+                        
+                        if ('data' in result and 
+                            isinstance(result['data'], dict) and 
+                            'data' in result['data']):
+                            captcha_text = result['data']['data']
+                            logger.info(f"云码识别成功：{captcha_text}")
+                            return captcha_text
+                        else:
+                            logger.warning("云码API返回成功，但未找到验证码结果")
+                            logger.info("请检查API响应结构，验证码应位于data.data字段")
                     else:
-                        error_msg = result.get('message', '未知错误')
-                        logger.warning(f"云码API返回错误: {error_msg}，尝试重试 {attempt+1}/{max_retries}")
+                        error_msg = result.get('message', result.get('msg', '未知错误'))
+                        logger.warning(f"云码API返回错误: 代码={result.get('code')}, 信息={error_msg}")
                 else:
-                    logger.warning(f"云码API请求失败，状态码: {response.status_code}，尝试重试 {attempt+1}/{max_retries}")
+                    logger.warning(f"云码API请求失败，状态码: {response.status_code}")
+                    logger.warning(f"响应内容: {response.text}")
                 
-
                 if attempt < max_retries - 1:
+                    logger.info(f"尝试重试 ({attempt+1}/{max_retries})")
                     time.sleep(random.uniform(1.0, 3.0))
             
             except Exception as e:
-                logger.warning(f"云码API请求出错: {str(e)}，尝试重试 {attempt+1}/{max_retries}")
+                logger.warning(f"云码API请求出错: {str(e)}")
+                import traceback
+                logger.debug(f"错误详情: {traceback.format_exc()}")
                 if attempt < max_retries - 1:
                     time.sleep(1)
         
@@ -392,6 +509,8 @@ def recognize_with_jfbym(image_data):
         
     except Exception as e:
         logger.error(f"处理验证码图片出错: {str(e)}")
+        import traceback
+        logger.error(f"错误详情: {traceback.format_exc()}")
         return None
 
 def recognize_captcha(captcha_url, cloud_api=True):
@@ -436,64 +555,108 @@ def recognize_captcha(captcha_url, cloud_api=True):
 
 
 def category_get():
-
-    res = get('https://api.bilibili.com/x/senior/v1/category', {
-        'access_key': access_token,
-        'csrf': csrf,
-        'disable_rcmd': 0,
-        'mobi_app': 'android',
-        'platform': 'android',
-        'statistics': '{"appId":1,"platform":3,"version":"8.40.0","abtest":""}',
-        'web_location': '333.790'
-    })
-    if res and res.get('code') == 0:
-        return res.get('data')
-    elif res and res.get('code') == 41099:
-        raise Exception('获取分类失败，可能是已经达到答题限制(B站每日限制3次)，请前往B站APP确认是否可以正常答题{}'.format(res))
-    else:
-        print('获取分类失败，请前往B站APP确认是否可以正常答题{}'.format(res))
-        exit()
+    
+    try:
+        
+        if not access_token:
+            logger.error("获取分类时发现未登录，请先完成登录")
+            return None
+            
+        params = {
+            'access_key': access_token,
+            'csrf': csrf,
+            'disable_rcmd': 0,
+            'mobi_app': 'android',
+            'platform': 'android',
+            'statistics': '{"appId":1,"platform":3,"version":"8.40.0","abtest":""}',
+            'web_location': '333.790'
+        }
+        
+        res = get('https://api.bilibili.com/x/senior/v1/category', params)
+        
+        if res and res.get('code') == 0:
+            return res.get('data')
+        elif res and res.get('code') == 41099:
+            logger.error(f'获取分类失败，可能是已经达到答题限制(B站每日限制3次)，请前往B站APP确认是否可以正常答题: {res}')
+            return None
+        elif res and res.get('code') == -101:
+            logger.error(f'获取分类失败，账号未登录错误，可能需要重新登录或刷新token: {res}')
+            return None
+        else:
+            logger.error(f'获取分类失败，请前往B站APP确认是否可以正常答题: {res}')
+            return None
+    except Exception as e:
+        logger.error(f"获取分类出错: {str(e)}")
+        return None
 
 def captcha_get():
-
-    res = get('https://api.bilibili.com/x/senior/v1/captcha', {
-        'access_key': access_token,
-        'csrf': csrf,
-        'disable_rcmd': 0,
-        'mobi_app': 'android',
-        'platform': 'android',
-        'statistics': '{"appId":1,"platform":3,"version":"8.40.0","abtest":""}',
-        'web_location': '333.790'
-    })
-    if res and res.get('code') == 0:
-        return res.get('data')
-    else:
-        raise Exception('获取验证码失败，请前往B站APP确认是否可以正常答题{}'.format(res))
+    
+    try:
+        
+        if not access_token:
+            logger.error("获取验证码时发现未登录，请先完成登录")
+            return None
+    
+        params = {
+            'access_key': access_token,
+            'csrf': csrf,
+            'disable_rcmd': 0,
+            'mobi_app': 'android',
+            'platform': 'android',
+            'statistics': '{"appId":1,"platform":3,"version":"8.40.0","abtest":""}',
+            'web_location': '333.790'
+        }
+        
+        res = get('https://api.bilibili.com/x/senior/v1/captcha', params)
+        
+        if res and res.get('code') == 0:
+            return res.get('data')
+        else:
+            error_msg = res.get('message', '未知错误') if res else '请求失败'
+            logger.error(f"获取验证码失败: {error_msg}")
+            return None
+    except Exception as e:
+        logger.error(f"获取验证码出错: {str(e)}")
+        return None
 
 def captcha_submit(code, captcha_token, ids):
-
-    res = post('https://api.bilibili.com/x/senior/v1/captcha/submit', {
-        "access_key": access_token,
-        "bili_code": code,
-        "bili_token": captcha_token,
-        "csrf": csrf,
-        "disable_rcmd": "0",
-        "gt_challenge": "",
-        "gt_seccode": "",
-        "gt_validate": "",
-        "ids": ids,
-        "mobi_app": "android",
-        "platform": "android",
-        "statistics": "{\"appId\":1,\"platform\":3,\"version\":\"8.40.0\",\"abtest\":\"\"}",
-        "type": "bilibili",
-    })
-    if res and res.get('code') == 0:
-        return True
-    else:
-        raise Exception('提交验证码失败{}'.format(res))
+    
+    try:
+        if not access_token:
+            logger.error("提交验证码时发现未登录，请先完成登录")
+            return False
+            
+        params = {
+            "access_key": access_token,
+            "bili_code": code,
+            "bili_token": captcha_token,
+            "csrf": csrf,
+            "disable_rcmd": "0",
+            "gt_challenge": "",
+            "gt_seccode": "",
+            "gt_validate": "",
+            "ids": ids,
+            "mobi_app": "android",
+            "platform": "android",
+            "statistics": "{\"appId\":1,\"platform\":3,\"version\":\"8.40.0\",\"abtest\":\"\"}",
+            "type": "bilibili",
+        }
+        
+        res = post('https://api.bilibili.com/x/senior/v1/captcha/submit', params)
+        
+        if res and res.get('code') == 0:
+            logger.info("验证码提交成功")
+            return True
+        else:
+            error_msg = res.get('message', '未知错误') if res else '请求失败'
+            logger.error(f"提交验证码失败: {error_msg}")
+            return False
+    except Exception as e:
+        logger.error(f"提交验证码出错: {str(e)}")
+        return False
 
 def question_get():
-
+    
     return get('https://api.bilibili.com/x/senior/v1/question', {
         "access_key": access_token,
         "csrf": csrf,
@@ -505,7 +668,7 @@ def question_get():
     })
 
 def question_submit(id, ans_hash, ans_text):
-
+    
     return post('https://api.bilibili.com/x/senior/v1/answer/submit', {
         "access_key": access_token,
         "csrf": csrf,
@@ -520,7 +683,7 @@ def question_submit(id, ans_hash, ans_text):
     })
 
 def question_result():
-
+    
     res = get('https://api.bilibili.com/x/senior/v1/answer/result', {
         "access_key": access_token,
         "csrf": csrf,
@@ -537,163 +700,342 @@ def question_result():
 
 
 def getTicket():
-
     ts = int(time.time())
     payload = f"ts={ts}&sign_method=HMAC-SHA1"
-    md5hash = hashlib.md5(f"api.bilibili.com/x/internal/oauth2/getHTTPTicket{ts}".encode()).hexdigest()
-
-    return f"{md5hash},{ts}"
+    
+    
+    try:
+        md5hash = hashlib.md5(f"api.bilibili.com/x/internal/oauth2/getHTTPTicket{ts}".encode()).hexdigest()
+        return f"{md5hash},{ts}"
+    except Exception as e:
+        logger.error(f"生成ticket失败: {str(e)}")
+        
+        fallback_hash = hashlib.md5(f"bilibili{ts}".encode()).hexdigest()
+        return f"{fallback_hash},{ts}"
 
 def qrcode_get():
-
-    headers.update({'x-bili-ticket': getTicket()})
-    res = get('https://passport.bilibili.com/x/passport-login/qrcode/auth', {
-        'disable_rcmd': 0,
-        'mobi_app': 'android',
-        'platform': 'android',
-        'statistics': '{"appId":1,"platform":3,"version":"8.40.0","abtest":""}',
-        'ts': str(int(time.time())),
-        'web_location': '333.790'
-    })
-    if res and res.get('code') == 0:
-        return res.get('data')
-    else:
-        raise Exception('获取二维码失败{}'.format(res))
+    
+    logger.debug("调用qrcode_get获取登录二维码")
+    try:
+        
+        params = {
+            'local_id': str(int(time.time())),
+            'app_id': '1',  
+        }
+        
+        
+        signed_params = appsign(params.copy())
+        logger.debug(f"请求参数(已签名): {signed_params}")
+        
+        
+        custom_headers = {
+            'User-Agent': API_CONFIG['user_agent'],
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        }
+        
+        url = 'https://passport.bilibili.com/x/passport-tv-login/qrcode/auth_code'
+        
+        
+        response = requests.post(
+            url=url,
+            data=signed_params,
+            headers=custom_headers,
+            timeout=10,
+            verify=False
+        )
+        
+        logger.debug(f"二维码API请求状态码: {response.status_code}")
+        
+        
+        if response.status_code != 200:
+            logger.error(f"二维码获取失败: HTTP状态码 {response.status_code}")
+            logger.error(f"响应内容: {response.text[:500]}")
+            return {'code': -1, 'message': f'HTTP错误: {response.status_code}', 'data': {}}
+        
+        
+        try:
+            json_resp = response.json()
+            logger.debug(f"二维码获取返回: {json_resp}")
+            
+            
+            if json_resp.get('code') != 0:
+                error_msg = json_resp.get('message', '未知错误')
+                logger.error(f"二维码获取失败: {error_msg}")
+                return json_resp
+            
+            
+            return json_resp
+            
+        except ValueError as e:
+            logger.error(f"二维码接口返回非JSON数据: {str(e)}")
+            logger.error(f"原始响应内容: {response.text[:500]}...")
+            return {'code': -1, 'message': '接口返回格式错误', 'data': {}}
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"获取二维码网络请求失败: {str(e)}")
+        import traceback
+        logger.error(f"请求异常详情: {traceback.format_exc()}")
+        return {'code': -1, 'message': f'请求错误: {str(e)}', 'data': {}}
+    except Exception as e:
+        logger.error(f"获取二维码时发生异常: {str(e)}")
+        import traceback
+        logger.error(f"异常详情: {traceback.format_exc()}")
+        return {'code': -1, 'message': str(e), 'data': {}}
 
 def qrcode_poll(auth_code):
-
-    return get('https://passport.bilibili.com/x/passport-login/qrcode/poll', {
-        'auth_code': auth_code,
-        'disable_rcmd': 0,
-        'mobi_app': 'android',
-        'platform': 'android',
-        'statistics': '{"appId":1,"platform":3,"version":"8.40.0","abtest":""}',
-        'web_location': '333.790'
-    })
+    
+    logger.debug(f"调用qrcode_poll检查二维码状态 auth_code={auth_code}")
+    
+    try:
+        
+        params = {
+            'auth_code': auth_code,
+            'app_id': '1',  
+            'local_id': str(int(time.time())),  
+        }
+        
+        
+        signed_params = appsign(params.copy())
+        logger.debug(f"轮询请求参数(已签名): {signed_params}")
+        
+        
+        custom_headers = {
+            'User-Agent': API_CONFIG['user_agent'],
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        }
+        
+        url = 'https://passport.bilibili.com/x/passport-tv-login/qrcode/poll'
+        
+        
+        response = requests.post(
+            url=url,
+            data=signed_params,
+            headers=custom_headers,
+            timeout=15,  
+            verify=False
+        )
+        
+        logger.debug(f"二维码轮询状态码: {response.status_code}")
+        logger.debug(f"请求URL: {url}")
+        logger.debug(f"请求参数: {signed_params}")
+        
+        
+        if response.status_code != 200:
+            logger.error(f"二维码状态获取失败: HTTP状态码 {response.status_code}")
+            logger.error(f"响应内容: {response.text[:500]}")
+            return {'code': -1, 'message': f'HTTP错误: {response.status_code}', 'data': {}}
+        
+        
+        try:
+            
+            logger.debug(f"原始响应: {response.text}")
+            
+            json_resp = response.json()
+            logger.debug(f"二维码状态轮询返回: {json_resp}")
+            
+            
+            return json_resp
+            
+        except ValueError as e:
+            logger.error(f"二维码状态接口返回非JSON数据: {str(e)}")
+            logger.error(f"原始响应内容: {response.text[:500]}...")
+            return {'code': -1, 'message': '接口返回格式错误', 'data': {}}
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"轮询二维码状态网络请求失败: {str(e)}")
+        import traceback
+        logger.error(f"请求异常详情: {traceback.format_exc()}")
+        return {'code': -1, 'message': f'请求错误: {str(e)}', 'data': {}}
+    except Exception as e:
+        logger.error(f"轮询二维码状态时发生异常: {str(e)}")
+        import traceback
+        logger.error(f"异常详情: {traceback.format_exc()}")
+        return {'code': -1, 'message': str(e), 'data': {}}
 
 def save_qrcode_image(url):
-
+    
     try:
-
-        qr_img = qrcode_make(url)
         
+        if not url:
+            logger.error("无法生成二维码: URL为空")
+            return None
+            
+        
+        try:
+            qr_img = qrcode_make(url)
+        except Exception as e:
+            logger.error(f"生成二维码图像失败: {str(e)}")
+            return None
 
+        
         temp_dir = Path(tempfile.gettempdir()) / APP_NAME
         os.makedirs(temp_dir, exist_ok=True)
-        
 
+        
         qr_path = temp_dir / "bili_qrcode.png"
-        qr_img.save(qr_path)
-        
-        logger.info(f"二维码图片已保存到: {qr_path}")
-        
-
         try:
-            if platform.system() == "Darwin":
+            qr_img.save(qr_path)
+            logger.info(f"二维码图片已保存到: {qr_path}")
+        except Exception as e:
+            logger.error(f"保存二维码图片失败: {str(e)}")
+            return None
+
+        
+        try:
+            if platform.system() == "Darwin":  
                 os.system(f"open {qr_path}")
             elif platform.system() == "Windows":
                 os.system(f"start {qr_path}")
             elif platform.system() == "Linux":
                 os.system(f"xdg-open {qr_path}")
             logger.info("已自动打开二维码图片")
-        except:
+        except Exception as e:
             logger.info(f"无法自动打开图片，请手动查看保存的二维码图片: {qr_path}")
             
         return str(qr_path)
     except Exception as e:
-        logger.error(f"保存二维码图片失败: {e}")
-        return None 
+        logger.error(f"保存二维码图片过程中出错: {str(e)}")
+        return None
 
 
 def auth():
-
-    if load_auth_data():
+    
+    global access_token, csrf, login_count
+    
+    
+    if check_auth():
         return True
+    
+    
+    login_count += 1
 
-    try:
-
-        headers.update({'x-bili-ticket': getTicket()})
-        qrcode_data = qrcode_get()
-        url = qrcode_data.get('url')
+    
+    logger.info("开始B站TV端登录流程...")
+    retry_count = 0
+    qr_data = None
+    
+    
+    while retry_count < 3:
+        qr_response = qrcode_get()
         
-
-        qr_image_path = save_qrcode_image(url)
+        if qr_response.get('code') == 0:
+            qr_data = qr_response.get('data', {})
+            if qr_data and qr_data.get('url') and qr_data.get('auth_code'):
+                break
         
-
-        qr = QRCode(
-            version=1,
-            error_correction=ERROR_CORRECT_L,
-            box_size=10,
-            border=2
-        )
-
-
-        qr.add_data(url)
-        qr.make(fit=True)
-
-
-        print("\n\n")
-        qr.print_ascii()
-        print("\n")
-        
-        logger.info('请使用哔哩哔哩APP扫描二维码登录')
-        logger.info('------------------------')
-        if qr_image_path:
-            logger.info(f"二维码图片已生成在: {qr_image_path}")
-        logger.info(f"二维码链接: {url}")
-        logger.info('如果二维码显示异常，请复制上面的链接，使用下面任一方法:')
-        logger.info('1. 直接在浏览器打开链接，然后用B站APP扫描网页上的二维码')
-        logger.info('2. 使用 https://cli.im/ 生成此链接的二维码进行扫码')
-        logger.info('------------------------')
-        
-
-        auth_code = qrcode_data.get('auth_code')
-        retry_count = 0
-        max_retries = 60
-
-        while retry_count < max_retries:
-            try:
-                poll_data = qrcode_poll(auth_code)
-                if poll_data.get('code') == 0:
-                    data = poll_data.get('data')
-                    auth_data = {
-                        'access_token': data.get('access_token'),
-                        'mid': str(data.get('mid')),
-                    }
-
-                    cookies = data.get('cookie_info').get('cookies')
-                    for cookie in cookies:
-                        if cookie.get('name') == 'bili_jct':
-                            auth_data.update({'csrf': cookie.get('value')})
-                            break
-                    cookie_str = ';'.join([f"{cookie.get('name')}={cookie.get('value')}" for cookie in cookies])
-                    auth_data.update({'cookie': cookie_str})
-
-                    global access_token, csrf
-                    access_token = auth_data['access_token']
-                    csrf = auth_data['csrf']
-                    headers.update({
-                        'x-bili-mid': auth_data['mid'],
-                        'cookie': auth_data['cookie']
-                    })
-
-
-                    save_auth_data(auth_data)
-                    logger.info('登录成功')
-                    return True
-
-            except Exception as e:
-                logger.error(f'轮询二维码状态失败: {str(e)}')
-
-            time.sleep(1)
-            retry_count += 1
-
-        logger.error('二维码登录超时')
+        retry_count += 1
+        logger.warning(f"获取二维码失败，{retry_count}/3次重试")
+        time.sleep(1)
+    
+    
+    if not qr_data or not qr_data.get('url') or not qr_data.get('auth_code'):
+        logger.error("无法获取登录二维码，请检查网络连接")
         return False
-
-    except Exception as e:
-        logger.error(f'认证过程发生错误: {str(e)}')
-        return False
+    
+    
+    auth_code = qr_data.get('auth_code')
+    qr_url = qr_data.get('url')
+    logger.info(f"获取二维码成功，请扫描二维码登录")
+    logger.info(f"二维码URL: {qr_url}")
+    logger.info(f"认证码: {auth_code}")
+    save_qrcode_image(qr_url)
+    
+    
+    logger.info("等待扫码...")
+    polling_count = 0
+    max_polling = 90  
+    
+    
+    last_code = None
+    
+    while polling_count < max_polling:
+        polling_count += 1
+        logger.info(f"轮询次数: {polling_count}/{max_polling}")
+        
+        
+        try:
+            poll_response = qrcode_poll(auth_code)
+            
+            
+            import json
+            logger.debug(f"原始响应: {json.dumps(poll_response, ensure_ascii=False)}")
+            
+            
+            response_code = poll_response.get('code', -1)
+            response_message = poll_response.get('message', '未知状态')
+            poll_data = poll_response.get('data', {})
+            
+            
+            if response_code != last_code:
+                logger.info(f"扫码状态变化: code={response_code}, message={response_message}")
+                last_code = response_code
+            
+            
+            if poll_data and 'access_token' in poll_data:
+                access_token = poll_data.get('access_token')
+                refresh_token = poll_data.get('refresh_token', '')
+                logger.info(f"发现access_token: {access_token[:10]}...")
+                
+                
+                auth_data = {
+                    'access_token': access_token,
+                    'refresh_token': refresh_token,
+                    'cookie': '',  
+                    'csrf': '',    
+                    'uid': '',     
+                    'timestamp': int(time.time())
+                }
+                save_auth_data(auth_data)
+                
+                logger.info("成功获取到access_token，立即返回True")
+                return True
+                
+            
+            if response_code == 0:
+                logger.info("收到成功状态码，但未找到access_token，检查响应内容...")
+                logger.info(f"完整响应内容: {poll_response}")
+                
+                
+                for key, value in poll_data.items():
+                    logger.info(f"数据字段: {key} = {value}")
+                
+                
+                logger.warning("API可能已变更，请查看日志并报告问题")
+                
+            
+            elif response_code == 86038:
+                logger.error("二维码已失效，请重新获取")
+                return False
+            elif response_code == 86039:
+                
+                pass  
+            elif response_code == 86090:
+                
+                pass  
+            elif response_code == 86101:
+                
+                pass  
+            else:
+                
+                logger.warning(f"未知状态码: {response_code}, 消息: {response_message}")
+                
+        except Exception as e:
+            import traceback
+            logger.error(f"轮询过程发生错误: {str(e)}")
+            logger.error(f"错误详情: {traceback.format_exc()}")
+        
+        
+        if response_code in [86039, 86090]:  
+            time.sleep(1)  
+        else:
+            time.sleep(2)  
+    
+    logger.error("二维码扫描超时，请重试")
+    return False
 
 
 class QuizSession:
@@ -798,19 +1140,40 @@ class QuizSession:
         try:
             logger.info("获取分类信息...")
             category = category_get()
-            if not category:
-                return False
             
-            ids = '6'
-            logger.info(f"已自动选择: 文史类 (ID: {ids})")
+            
+            if not category:
+                logger.warning("无法自动获取分类，将使用默认分类或手动选择")
+                
+                
+                if AUTO_SELECT_CATEGORY:
+                    ids = AUTO_CATEGORY_ID
+                    logger.info(f"使用配置的默认分类: 文史类 (ID: {ids})")
+                else:
+                    logger.info("请选择分类:")
+                    logger.info("[1] 文史类 (ID: 6) - 推荐")
+                    logger.info("[2] 理工类 (ID: 8)")
+                    logger.info("[3] 艺术类 (ID: 7)")
+                    logger.info("[4] 财经类 (ID: 9)")
+                    
+                    
+                    category_choice = input('请选择分类 [默认1]: ').strip() or '1'
+                    category_map = {'1': '6', '2': '8', '3': '7', '4': '9'}
+                    ids = category_map.get(category_choice, '6')
+                    logger.info(f"已选择: ID {ids}")
+            else:
+                
+                ids = AUTO_CATEGORY_ID if AUTO_SELECT_CATEGORY else '6'
+                logger.info(f"已自动选择: 文史类 (ID: {ids})")
             
             logger.info("获取验证码...")
             captcha_res = captcha_get()
+            if not captcha_res:
+                logger.error("获取验证码失败，请确认登录状态")
+                return False
+                
             captcha_url = captcha_res.get('url')
             logger.info(f"验证码链接: {captcha_url}")
-            
-            if not captcha_res:
-                return False
             
             captcha = None
             
@@ -838,7 +1201,9 @@ class QuizSession:
             
             while retry_count < max_retries:
                 try:
-                    if captcha_submit(code=captcha, captcha_token=captcha_res.get('token'), ids=ids):
+                    
+                    captcha_token = captcha_res.get('token')
+                    if captcha_submit(code=captcha, captcha_token=captcha_token, ids=ids):
                         logger.info("验证通过✅")
                         return self.get_question()
                     else:
@@ -860,8 +1225,8 @@ class QuizSession:
                             time.sleep(2)
                 except Exception as e:
                     retry_count += 1
+                    logger.error(f"提交验证码失败: {str(e)}")
                     if retry_count >= max_retries:
-                        logger.error(f"提交验证码失败: {str(e)}")
                         retry_choice = input('是否重试? [1]是 [2]否: ')
                         if retry_choice == '1':
                             return self.handle_verification()
@@ -971,80 +1336,325 @@ class QuizSession:
             logger.error(f"获取答题结果时出错: {str(e)}")
 
 
+def clear_user_data(force=False):
+    
+    global access_token, csrf, JFBYM_TOKEN, API_KEY_DEEPSEEK, USE_CLOUD_CAPTCHA, AUTO_SELECT_CATEGORY
+    
+    files_to_remove = []
+    
+    
+    if os.path.exists(AUTH_FILE):
+        files_to_remove.append(AUTH_FILE)
+    
+    if not force:  
+        access_token = None
+        csrf = None
+        logger.info("已清除登录状态，将重新获取二维码登录")
+        return
+        
+    
+    config_files = [
+        AUTH_FILE,
+        DEEPSEEK_KEY_FILE,
+        CLOUD_CONFIG_FILE,
+        CATEGORY_CONFIG_FILE
+    ]
+    
+    for file_path in config_files:
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"已删除配置文件: {file_path}")
+            except Exception as e:
+                logger.error(f"删除文件 {file_path} 失败: {str(e)}")
+    
+    
+    access_token = None
+    csrf = None
+    API_KEY_DEEPSEEK = None
+    JFBYM_TOKEN = ""
+    USE_CLOUD_CAPTCHA = False
+    AUTO_SELECT_CATEGORY = False
+    
+    logger.info("所有用户数据已清除，将重新进行完整设置")
+
+
+def get_user_info():
+    
+    try:
+        
+        url = 'https://api.bilibili.com/x/web-interface/nav'
+        
+        response = session.get(
+            url,
+            headers={
+                'User-Agent': API_CONFIG['user_agent'],
+                'Referer': 'https://www.bilibili.com/'
+            },
+            verify=False
+        )
+        
+        
+        if response.status_code != 200:
+            logger.error(f"获取用户信息失败: HTTP状态码 {response.status_code}")
+            return {'code': -1, 'message': f'HTTP错误 {response.status_code}'}
+        
+        data = response.json()
+        
+        
+        logger.debug(f"获取用户信息响应: {data}")
+        
+        if data.get('code') == 0:
+            if data.get('data', {}).get('isLogin', False):
+                
+                uname = data.get('data', {}).get('uname', '未知用户')
+                mid = data.get('data', {}).get('mid', '0')
+                logger.info(f"当前登录用户: {uname} (UID: {mid})")
+                return data
+            else:
+                logger.warning("用户未登录")
+                return {'code': -101, 'message': '用户未登录'}
+        else:
+            logger.warning(f"获取用户信息失败: {data.get('message', '未知错误')}")
+            return data
+            
+    except Exception as e:
+        logger.error(f"获取用户信息时发生错误: {str(e)}")
+        return {'code': -1, 'message': str(e)}
+
+
+def load_config():
+    
+    default_config = {
+        'deepseek_api_key': '',
+        'jfbym_token': '',
+        'jfbym_type': '10103',
+        'use_cloud_captcha': False,
+        'auto_select_category': False,
+        'category_id': '6'
+    }
+    
+    try:
+        
+        if os.path.exists(PROJECT_CONFIG_FILE):
+            logger.info(f"使用项目目录配置文件: {PROJECT_CONFIG_FILE}")
+            with open(PROJECT_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                
+                
+                for key in default_config:
+                    if key not in config:
+                        config[key] = default_config[key]
+                        
+                return config, PROJECT_CONFIG_FILE
+        
+        
+        elif os.path.exists(CONFIG_FILE):
+            logger.info(f"使用用户主目录配置文件: {CONFIG_FILE}")
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                
+                
+                for key in default_config:
+                    if key not in config:
+                        config[key] = default_config[key]
+                        
+                return config, CONFIG_FILE
+        else:
+            
+            logger.info(f"配置文件不存在，将在项目目录创建: {PROJECT_CONFIG_FILE}")
+            save_config(default_config, PROJECT_CONFIG_FILE)
+            return default_config, PROJECT_CONFIG_FILE
+    except Exception as e:
+        logger.error(f"加载配置文件出错: {str(e)}")
+        return default_config, PROJECT_CONFIG_FILE
+
+def save_config(config, config_path=None):
+    
+    
+    if config_path is None:
+        config_path = PROJECT_CONFIG_FILE
+        
+    try:
+        
+        dir_path = os.path.dirname(config_path)
+        os.makedirs(dir_path, exist_ok=True)
+        
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4, ensure_ascii=False)
+        logger.info(f"配置已保存到: {config_path}")
+    except Exception as e:
+        logger.error(f"保存配置文件出错: {str(e)}")
+
 def main():
     try:
         global API_KEY_DEEPSEEK, USE_CLOUD_CAPTCHA, JFBYM_TOKEN, AUTO_SELECT_CATEGORY, AUTO_CATEGORY_ID
         
-        API_KEY_DEEPSEEK = load_api_key()
+        print("\n===================================")
+        print("B站硬核会员自动答题工具")
+        print("版本: 1.0.0")
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"启动时间: {current_time}")
+        print("===================================\n")
+        
+        
+        print("如果您喜欢这个工具，可以查看原项目并给作者Star:")
+        print("https://github.com/SkyBlue997/BiliRaku")
+        print("基于B站API和DeepSeek的硬核会员自动答题工具\n")
+        
+        
+        parser = argparse.ArgumentParser(description='B站硬核会员自动答题工具')
+        parser.add_argument('--clean', action='store_true', help='清除之前的登录信息，强制重新登录')
+        parser.add_argument('--reset', action='store_true', help='重置所有配置，包括API密钥和配置信息')
+        parser.add_argument('--keep', action='store_true', help='保持之前的登录状态，不清除数据')
+        parser.add_argument('--config', action='store_true', help='编辑配置文件')
+        args = parser.parse_args()
+        
+        
+        has_previous_login = os.path.exists(AUTH_FILE)
+        
+        
+        if not (args.keep or args.clean) and has_previous_login:
+            
+            previous_auth_info = "未知账户"
+            try:
+                with open(AUTH_FILE, 'r') as f:
+                    auth_data = json.load(f)
+                    if 'uid' in auth_data and auth_data['uid']:
+                        previous_auth_info = f"UID: {auth_data['uid']}"
+                        logger.info(f"找到之前的登录信息: {previous_auth_info}")
+            except Exception as e:
+                logger.error(f"读取之前的登录信息失败: {str(e)}")
+            
+            print(f"\n检测到上次登录的账户 ({previous_auth_info})")
+            keep_login = input('是否使用上次的账户登录? [1]是 [2]否: ').strip() or '1'
+            
+            if keep_login == '1':
+                logger.info("用户选择使用上次的账户登录")
+                args.keep = True  
+            else:
+                logger.info("用户选择重新登录")
+                args.clean = True  
+        
+        
+        if args.clean or (not args.keep and not has_previous_login):
+            logger.info("清除之前的登录信息，将重新登录")
+            if os.path.exists(AUTH_FILE):
+                try:
+                    os.remove(AUTH_FILE)
+                    logger.info("已清除之前的登录信息")
+                except Exception as e:
+                    logger.error(f"清除登录信息失败: {str(e)}")
+            
+            global access_token, csrf
+            access_token = None
+            csrf = None
+        elif args.keep or (not args.clean and has_previous_login):
+            logger.info("保留之前的登录信息")
+        
+        
+        if args.reset:
+            clear_user_data(force=True)
+            
+            if os.path.exists(PROJECT_CONFIG_FILE):
+                try:
+                    os.remove(PROJECT_CONFIG_FILE)
+                    logger.info(f"已删除项目目录配置文件: {PROJECT_CONFIG_FILE}")
+                except Exception as e:
+                    logger.error(f"删除配置文件失败: {str(e)}")
+            if os.path.exists(CONFIG_FILE):
+                try:
+                    os.remove(CONFIG_FILE)
+                    logger.info(f"已删除用户目录配置文件: {CONFIG_FILE}")
+                except Exception as e:
+                    logger.error(f"删除配置文件失败: {str(e)}")
+        
+        
+        config, config_path = load_config()
+        
+        
+        if args.config:
+            print(f"\n配置文件位置: {config_path}")
+            print("请使用文本编辑器打开并编辑配置文件，然后保存并重新启动程序")
+            print("配置项说明:")
+            print("  deepseek_api_key: DeepSeek API密钥")
+            print("  jfbym_token: 云码API Token")
+            print("  jfbym_type: 验证码类型ID (默认B站验证码类型为10103)")
+            print("  use_cloud_captcha: 是否使用云码API (true/false)")
+            print("  auto_select_category: 是否自动选择分类 (true/false)")
+            print("  category_id: 分类ID (6:文史类, 推荐)")
+            input("按回车键退出...")
+            return
+        
+        
+        API_KEY_DEEPSEEK = config.get('deepseek_api_key', '')
         if not API_KEY_DEEPSEEK:
-            logger.info("首次使用需配置DeepSeek API密钥")
+            logger.info("配置文件中缺少DeepSeek API密钥，请输入")
             API_KEY_DEEPSEEK = input('请输入DeepSeek API密钥: ').strip()
             if API_KEY_DEEPSEEK:
-                save_api_key(API_KEY_DEEPSEEK)
+                config['deepseek_api_key'] = API_KEY_DEEPSEEK
+                save_config(config, config_path)
             else:
                 logger.error("未配置API密钥，程序退出")
                 return
         
-        cloud_config_path = os.path.join(USER_CONFIG_DIR, 'jfbym_key.json')
-        if os.path.exists(cloud_config_path):
-            try:
-                with open(cloud_config_path, 'r') as f:
-                    cloud_data = json.load(f)
-                    JFBYM_TOKEN = cloud_data.get('token', '')
-                    JFBYM_TYPE = cloud_data.get('type', '10101')
-                    if JFBYM_TOKEN:
-                        USE_CLOUD_CAPTCHA = True
-                        logger.info("已加载云码API配置")
-            except Exception as e:
-                logger.error(f"读取云码配置失败: {str(e)}")
-                
-        category_config_path = os.path.join(USER_CONFIG_DIR, 'category_config.json')
-        if os.path.exists(category_config_path):
-            try:
-                with open(category_config_path, 'r') as f:
-                    category_data = json.load(f)
-                    AUTO_SELECT_CATEGORY = category_data.get('auto_select', False)
-                    if AUTO_SELECT_CATEGORY:
-                        AUTO_CATEGORY_ID = category_data.get('category_id', '6')
-                        logger.info(f"已加载自动分类配置: ID {AUTO_CATEGORY_ID}")
-            except Exception as e:
-                logger.error(f"读取分类配置失败: {str(e)}")
         
-        if not USE_CLOUD_CAPTCHA:
+        JFBYM_TOKEN = config.get('jfbym_token', '')
+        JFBYM_TYPE = config.get('jfbym_type', '10103')
+        USE_CLOUD_CAPTCHA = config.get('use_cloud_captcha', False)
+        
+        
+        if not JFBYM_TOKEN and not USE_CLOUD_CAPTCHA:
             print("是否配置云码API用于自动识别验证码？(不配置将使用浏览器打开验证码)")
             cloud_choice = input("[1]是 [2]否: ").strip()
             if cloud_choice == '1':
-                JFBYM_TOKEN = input('请输入云码API token(需用引号包裹): ').strip()
+                JFBYM_TOKEN = input('请输入云码API token: ').strip()
+                
+                
                 if (JFBYM_TOKEN.startswith('"') and JFBYM_TOKEN.endswith('"')) or \
                 (JFBYM_TOKEN.startswith("'") and JFBYM_TOKEN.endswith("'")):
                     JFBYM_TOKEN = JFBYM_TOKEN[1:-1]
                     
-                JFBYM_TYPE = input('请输入验证码类型ID (默认B站验证码类型为10101): ').strip() or '10101'
+                JFBYM_TYPE = input('请输入验证码类型ID (默认B站验证码类型为10103): ').strip() or '10103'
                 if JFBYM_TOKEN:
-                    try:
-                        os.makedirs(USER_CONFIG_DIR, exist_ok=True)
-                        with open(cloud_config_path, 'w') as f:
-                            json.dump({'token': JFBYM_TOKEN, 'type': JFBYM_TYPE}, f)
-                        print("云码API配置已保存")
-                        USE_CLOUD_CAPTCHA = True
-                    except Exception as e:
-                        logger.error(f"保存云码配置失败: {str(e)}")
                     
-                    auto_category = input("是否自动选择分类，无需每次手动选择? [1]是 [2]否: ").strip()
-                    if auto_category == '1':
-                        print("请选择默认分类:")
-                        print("[1] 文史类 (ID: 6) - 推荐")
-                        AUTO_CATEGORY_ID = '6'
-                        AUTO_SELECT_CATEGORY = True
-                        print(f"已设置自动选择分类ID: {AUTO_CATEGORY_ID}")
-                        try:
-                            with open(category_config_path, 'w') as f:
-                                json.dump({'auto_select': True, 'category_id': AUTO_CATEGORY_ID}, f)
-                        except Exception as e:
-                            logger.error(f"保存分类配置失败: {str(e)}")
+                    config['jfbym_token'] = JFBYM_TOKEN
+                    config['jfbym_type'] = JFBYM_TYPE
+                    config['use_cloud_captcha'] = True
+                    save_config(config, config_path)
+                    USE_CLOUD_CAPTCHA = True
+                    print("云码API配置已保存")
             else:
                 USE_CLOUD_CAPTCHA = False
+                config['use_cloud_captcha'] = False
+                save_config(config, config_path)
                 print("将使用浏览器打开验证码")
+        elif JFBYM_TOKEN and USE_CLOUD_CAPTCHA:
+            logger.info("已从配置文件加载云码API设置")
+        
+        
+        AUTO_SELECT_CATEGORY = config.get('auto_select_category', False)
+        AUTO_CATEGORY_ID = config.get('category_id', '6')
+        
+        
+        if not AUTO_SELECT_CATEGORY and USE_CLOUD_CAPTCHA:
+            auto_category = input("是否自动选择分类，无需每次手动选择? [1]是 [2]否: ").strip()
+            if auto_category == '1':
+                print("请选择默认分类:")
+                print("[1] 文史类 (ID: 6) - 推荐")
+                AUTO_CATEGORY_ID = '6'
+                AUTO_SELECT_CATEGORY = True
+                
+                config['auto_select_category'] = True
+                config['category_id'] = AUTO_CATEGORY_ID
+                save_config(config, config_path)
+                print(f"已设置自动选择分类ID: {AUTO_CATEGORY_ID}")
+            else:
+                AUTO_SELECT_CATEGORY = False
+                config['auto_select_category'] = False
+                save_config(config, config_path)
+        elif AUTO_SELECT_CATEGORY:
+            logger.info(f"已从配置文件加载分类设置: ID {AUTO_CATEGORY_ID}")
         
         if not auth():
             logger.error("登录失败，程序退出")
@@ -1055,8 +1665,10 @@ def main():
     
     except Exception as e:
         logger.error(f"程序运行出错: {str(e)}")
+        import traceback
+        logger.error(f"错误详情: {traceback.format_exc()}")
     finally:
         input("按回车键退出程序...")
 
 if __name__ == "__main__":
-    main() 
+    main()

@@ -54,6 +54,42 @@ python biliraku.py
    - 文史类题目通常通过率更高
    - 答题入口可在[B站硬核会员答题页面](https://www.bilibili.com/v/hardgame)找到
 
+## ⚙️ 配置说明
+
+### config.json 配置文件
+程序支持以下配置项：
+```json
+{
+  "deepseek_api_key": "",        // DeepSeek AI API密钥
+  "jfbym_token": "",            // 云码验证码识别API令牌
+  "jfbym_type": "10103",        // B站验证码类型ID
+  "use_cloud_captcha": true,    // 是否使用云码API识别验证码
+  "auto_select_category": true, // 是否自动选择答题分类
+  "category_id": "6"           // 默认答题分类ID (6=文史类)
+}
+```
+
+### 参数说明
+- `deepseek_api_key`: 必填，用于AI答题的DeepSeek API密钥
+- `jfbym_token`: 可选，用于自动识别验证码的云码API Token
+- `use_cloud_captcha`: 是否启用云码API自动识别验证码
+- `auto_select_category`: 是否自动选择答题分类
+- `category_id`: 答题分类ID，推荐使用6(文史类)
+
+### 配置文件位置
+程序按以下顺序查找配置文件：
+1. 项目目录下的 config.json
+2. 用户主目录下的 .biliraku/config.json
+
+### 命令行参数
+程序支持以下命令行参数：
+```bash
+--clean    # 清除之前的登录信息，强制重新登录
+--reset    # 重置所有配置，包括API密钥和配置信息
+--keep     # 保持之前的登录状态，不清除数据
+--config   # 编辑配置文件
+```
+
 ## 📚 使用流程
 
 1. **登录B站账号**
@@ -120,6 +156,11 @@ AI给出的答案:2
    - 检查网络连接是否正常
    - 确认DeepSeek API密钥是否有效
 
+5. **配置文件问题**
+   - 首次运行会在项目目录创建默认配置文件
+   - 可使用 --config 参数打开并编辑配置
+   - 建议保管好API密钥，避免泄露
+
 ## 🛡️ 免责声明
 
 - 本工具仅供学习研究使用，请勿用于任何商业用途
@@ -130,4 +171,4 @@ AI给出的答案:2
 
 ## 📄 许可证
 
-本项目采用MIT许可证 - 详情请参阅LICENSE文件 
+本项目采用MIT许可证 - 详情请参阅LICENSE文件
