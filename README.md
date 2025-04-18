@@ -23,7 +23,7 @@
 
 1. 克隆本仓库到本地
 ```bash
-git clone https://github.com/your-username/biliraku.git
+git clone https://github.com/SkyBlue997/BiliRaku
 cd biliraku
 ```
 
@@ -41,7 +41,7 @@ python biliraku.py
 
 1. **DeepSeek API配置**
    - 首次使用时，需要输入DeepSeek API密钥
-   - 可在[DeepSeek官网](https://deepseek.com)申请API密钥
+   - 可在[DeepSeek官网](https://platform.deepseek.com/api_keys)申请API密钥
    - API密钥将安全保存在用户目录下，不会上传到网络
 
 2. **云码API配置（可选）**
