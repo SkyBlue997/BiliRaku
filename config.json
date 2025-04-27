@@ -1,0 +1,8 @@
+{
+    "deepseek_api_key": "key",
+    "jfbym_token": "token",
+    "jfbym_type": "10103",
+    "use_cloud_captcha": true,
+    "auto_select_category": true,
+    "category_id": "6"
+}
